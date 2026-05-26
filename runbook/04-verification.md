@@ -1,88 +1,59 @@
-# 04 — Verification + performance comparison
+# 04 — Verification
 
-Confirm that ROS 2 Lyrical works end-to-end with NVIDIA GPU
-acceleration. Quantify the GPU improvement over the Phase 2
-virtio-gpu baseline using `glmark2-wayland`.
+Confirm the full ROS 2 Lyrical desktop stack works end-to-end in the
+VM. Verify rviz2 renders on virtio-gpu, TF2 works, and CUDA compute
+is available on the NVIDIA GPU.
 
 ## Goal
 
 After this phase:
 
-- rviz2 renders on the NVIDIA GPU inside the VM.
-- `glmark2-wayland` score on NVIDIA is recorded and compared to the
-  Phase 2 virtio-gpu baseline.
+- rviz2 renders on virtio-gpu (virgl) inside the VM.
 - The full ROS 2 desktop stack (TF2, robot_state_publisher) is
   verified.
+- CUDA availability on the NVIDIA GPU is confirmed.
+- GPU performance comparison (virtio-gpu vs NVIDIA VFIO) is
+  documented.
 - Final disk backup taken.
+
+## Context — display limitation
+
+Phase 3 Step 9 established that PRIME render offload to the NVIDIA
+GPU works (glmark2 score 949) but the rendered frames are invisible
+on screen because virtio-gpu cannot import DMA-BUFs from the real
+GPU. All visible GL applications — including rviz2 — render on
+virtio-gpu / virgl (score 283). The NVIDIA GPU is available for
+CUDA compute and headless rendering only.
 
 ## Prerequisites
 
 - Phase 3 complete: VM boots with NVIDIA VFIO passthrough,
-  `nvidia-smi` works, PRIME offload verified.
-- Phase 2 glmark2 baseline saved at
-  `~/glmark2-baseline-virtio-gpu.txt` inside the guest.
+  `nvidia-smi` works, display limitation documented.
 
 ---
 
-## Step 1 — glmark2 with NVIDIA (the "after" measurement)
+## Step 1 — rviz2 on virtio-gpu
 
-Inside the guest, run `glmark2-wayland` with PRIME offload to target
-the NVIDIA GPU:
-
-```sh
-$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-    glmark2-wayland 2>&1 | tee ~/glmark2-nvidia-vfio.txt
-```
-
-**Record:**
-
-1. The **OpenGL renderer string** (expect `NVIDIA RTX 2000 Ada` or
-   similar)
-2. The **composite score**
-
-Compare against the Phase 2 baseline:
+Launch rviz2 (renders on the default virtio-gpu / virgl):
 
 ```sh
-$ echo "=== Baseline (virtio-gpu) ==="
-$ grep -E 'GL_RENDERER|Score' ~/glmark2-baseline-virtio-gpu.txt
-$ echo ""
-$ echo "=== NVIDIA VFIO ==="
-$ grep -E 'GL_RENDERER|Score' ~/glmark2-nvidia-vfio.txt
-```
-
-**Watch out:** if `glmark2-wayland` with PRIME offload falls back to
-virgl, the NVIDIA EGL/GLX integration may not be picking up the
-Wayland display. Try `glmark2-x11` with PRIME offload as a fallback:
-
-```sh
-$ sudo apt install glmark2-x11
-$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-    glmark2-x11 2>&1 | tee ~/glmark2-nvidia-vfio-x11.txt
-```
-
-## Step 2 — rviz2 on NVIDIA
-
-Launch rviz2 with PRIME offload:
-
-```sh
-$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia rviz2
+$ rviz2
 ```
 
 **Verify:**
 
 - rviz2 opens and renders the 3D viewport.
-- Check the renderer: in rviz2, the OpenGL renderer is printed to
-  stderr on launch, or check via:
+- The window is visible and interactive.
+
+Check the renderer in another terminal:
 
 ```sh
-$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-    glxinfo | grep 'OpenGL renderer'
+$ glxinfo | grep 'OpenGL renderer'
 ```
 
-Should show NVIDIA, not llvmpipe or virgl. **This is the project's
-key validation.**
+**Verify:** shows `virgl` — this is the display-capable renderer.
 
-## Step 3 — TF2 / robot_state_publisher
+## Step 2 — TF2 / robot_state_publisher
 
 Verify the full ROS 2 desktop stack beyond ros-base:
 
@@ -98,52 +69,60 @@ $ ros2 topic echo /tf_static
 
 **Verify:** the static transform is published and received.
 
-## Step 4 — GPU utilization under load
+## Step 3 — CUDA compute verification
 
-While rviz2 is running (Step 2), check GPU utilization:
+Confirm the NVIDIA GPU is available for compute workloads:
 
 ```sh
 $ nvidia-smi
 ```
 
-**Verify:** the GPU utilization percentage is non-zero (confirms the
-GPU is actively rendering, not idle).
+**Verify:** shows the RTX 2000 Ada, driver version, and CUDA
+version (13.2).
 
-For continuous monitoring:
-
-```sh
-$ watch -n1 nvidia-smi
-```
-
-## Step 5 — Document performance comparison
-
-Create a summary of the benchmark results. Inside the guest:
+For a quick CUDA compute test (if CUDA toolkit is installed):
 
 ```sh
-$ nano ~/gpu-performance-comparison.txt
+$ sudo apt-get install -y nvidia-cuda-toolkit
+$ nvcc --version
 ```
 
-Suggested format:
+## Step 4 — Document performance summary
+
+```sh
+$ nano ~/gpu-performance-summary.txt
+```
+
+Paste:
 
 ```
-GPU Performance Comparison — ros2-lyrical-dev VM
-================================================
+GPU Performance Summary — ros2-lyrical-dev VM
+=============================================
 
-Date: YYYY-MM-DD
+Date: 2026-05-26
 Host: Dell Precision 3581, Ubuntu 26.04, kernel 7.0.0-15-generic
 
-Phase 2 baseline (virtio-gpu / virgl):
-  Renderer: <renderer string from Phase 2>
-  glmark2 score: <score from Phase 2>
+Display GPU: virtio-gpu / virgl (Mesa Intel Iris Xe via host iGPU)
+  glmark2-wayland score (800x600):  283
+  glmark2-wayland score (1920x1080): 217
+  All visible GL apps render here (rviz2, Gazebo, etc.)
 
-Phase 4 (NVIDIA RTX 2000 Ada via VFIO):
-  Renderer: <renderer string from Step 1>
-  glmark2 score: <score from Step 1>
+Compute GPU: NVIDIA RTX 2000 Ada via VFIO passthrough
+  glmark2-wayland score (800x600):  949  (3.4x faster, but invisible)
+  Driver: 595.71.05
+  CUDA: 13.2
+  VRAM: 8192 MiB
+  Available for: CUDA, NVENC, headless rendering
 
-Improvement: <NVIDIA score / virtio-gpu score>x
+Limitation: virtio-gpu cannot import DMA-BUFs from the NVIDIA GPU.
+PRIME render offload works (GPU renders correctly) but the
+compositor cannot display the result. This is a kernel-level gap
+(virtio-gpu driver lacks cross-device DMA import). An unmerged
+patch series (drm/virtio: Import scanout buffers) would fix this
+but is not in mainline as of kernel 7.0.
 ```
 
-## Step 6 — Final snapshot
+## Step 5 — Final snapshot
 
 Shut down the guest:
 
@@ -154,29 +133,29 @@ $ sudo shutdown -h now
 On the host:
 
 ```sh
-$ sudo cp /var/lib/libvirt/images/ros2-lyrical-dev.qcow2 \
-       /var/lib/libvirt/images/ros2-lyrical-dev.phase4-verified.qcow2
+$ sudo cp /var/lib/libvirt/images/ros2-lyrical-dev.qcow2 /var/lib/libvirt/images/ros2-lyrical-dev.phase4-verified.qcow2
 ```
 
 ---
 
 ## Done — Phase 4 exit criteria
 
-- [ ] glmark2 NVIDIA score recorded and compared to virtio-gpu
-      baseline (both saved in `~/glmark2-*.txt`)
-- [ ] rviz2 renders on the NVIDIA GPU (renderer string confirms)
-- [ ] `nvidia-smi` shows non-zero GPU utilization during rviz2
+- [ ] rviz2 renders on virtio-gpu (virgl) — window visible and
+      interactive
 - [ ] TF2 static_transform_publisher works
-- [ ] Performance comparison documented in
-      `~/gpu-performance-comparison.txt`
+- [ ] `nvidia-smi` shows NVIDIA GPU with CUDA available
+- [ ] Performance summary documented in
+      `~/gpu-performance-summary.txt`
 - [ ] Final disk backup
       `ros2-lyrical-dev.phase4-verified.qcow2` exists
 
 ## Project complete
 
 All four phases are done. The VM is a general-purpose ROS 2 Lyrical
-development environment with NVIDIA GPU acceleration via VFIO
-passthrough.
+development environment with:
+
+- **Display / GL**: virtio-gpu / virgl (rviz2, Gazebo, etc.)
+- **Compute**: NVIDIA RTX 2000 Ada via VFIO (CUDA 13.2, 8 GB VRAM)
 
 To start the VM in future sessions:
 

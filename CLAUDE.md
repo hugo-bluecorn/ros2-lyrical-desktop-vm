@@ -24,14 +24,17 @@ full GPU compute and 3D acceleration via the host's dedicated NVIDIA GPU.
 - **Guest**: Kubuntu 26.04 LTS desktop (same Resolute base as host),
   installed from the Kubuntu 26.04 desktop ISO with the installer's
   "minimal installation" option.
-- **Graphics**: NVIDIA RTX 2000 Ada passed through via VFIO
-  (`<hostdev mode='subsystem' type='pci' managed='yes'>`). virtio-gpu
-  retained as the display device (MUXless dGPU has no physical display
-  outputs). The guest gets both: virtio-gpu for display compositing,
-  NVIDIA for 3D/compute. NVIDIA driver installed inside the guest.
-- **Display**: SPICE or virtio-gpu console for initial setup; once
-  NVIDIA driver is installed in guest, rviz2 and other GL apps use the
-  NVIDIA GPU via EGL.
+- **Graphics**: dual-GPU guest. virtio-gpu is the display device and
+  renders all visible GL apps (rviz2, Gazebo) via virgl. NVIDIA RTX
+  2000 Ada is passed through via VFIO for CUDA compute, NVENC, and
+  headless rendering. PRIME render offload to the NVIDIA GPU works
+  (the GPU renders correctly) but results are **not visible on
+  screen** — the virtio-gpu kernel driver cannot import DMA-BUFs from
+  the real GPU. This is a kernel-level limitation (unmerged patch
+  series "drm/virtio: Import scanout buffers" would fix it). NVIDIA
+  driver installed inside the guest.
+- **Display**: SPICE console via virtio-gpu. All visible rendering
+  goes through virgl (Intel Iris Xe via host iGPU).
 - **Network**: libvirt default NAT (`virbr0`).
 - **Disk**: qcow2 on virtio-blk.
 - **VM management**: libvirt, domain XML in version control at `vm/`.
@@ -55,21 +58,23 @@ is recorded.
 3. **Phase 3 — NVIDIA GPU passthrough** — verify IOMMU (no kernel
    params needed on kernel 7.0), `prime-select intel`, reboot (the
    only one), add VFIO `<hostdev>` to domain XML, install NVIDIA
-   driver in guest. Handle MUXless vBIOS extraction if needed. Verify
-   `nvidia-smi` and PRIME offload OpenGL.
-4. **Phase 4 — Verification + performance comparison** — run
-   `glmark2-wayland` on NVIDIA and compare to the Phase 2 baseline.
-   Launch rviz2 on the NVIDIA GPU. Verify TF2, GPU utilization.
-   Document the performance comparison. Final snapshot.
+   driver in guest. Verify `nvidia-smi` and CUDA availability.
+   Document the DMA-BUF display limitation (NVIDIA renders correctly
+   via PRIME offload but virtio-gpu cannot import the frames for
+   display; glmark2 score 949 vs virgl 283 but invisible).
+4. **Phase 4 — Verification** — verify rviz2 renders on virtio-gpu
+   (virgl), TF2 works, CUDA compute is available on the NVIDIA GPU.
+   Document performance summary. Final snapshot.
 
 ## Key constraints
 
 - **MUXless dGPU has no display outputs.** All four physical connectors
   are wired to the Intel iGPU. The guest needs virtio-gpu for its
-  display surface; the NVIDIA GPU provides compute and GL rendering
-  but cannot drive a monitor directly. This is the coexistence
-  configuration documented in Ubuntu's GPU-virtualization-with-QEMU/KVM
-  guide: virtio-gpu (display) + VFIO (compute/3D).
+  display surface. The NVIDIA GPU is available for CUDA/compute but
+  **cannot produce visible GL output** — virtio-gpu's kernel driver
+  lacks DMA-BUF import from real GPUs, so PRIME-offloaded frames are
+  rendered but invisible. All visible GL apps (rviz2, Gazebo) render
+  on virtio-gpu / virgl.
 - **`prime-select intel` required before VM start.** The host NVIDIA
   driver holds fds on the dGPU even when the card is RTD3-suspended.
   `managed='yes'` VFIO detach will fail unless the nvidia kernel

@@ -38,21 +38,41 @@ After this phase:
 
 ---
 
-## Step 1 — Verify locale
+## Step 1 — Boot the VM and verify locale
 
-Inside the guest:
+On the host, start the VM:
+
+```sh
+$ virsh start ros2-lyrical-dev
+```
+
+Open a console via virt-manager or connect with `virt-viewer`.
+Log in, then inside the guest:
 
 ```sh
 $ locale
 ```
 
-**Verify:** `LANG` shows a UTF-8 locale (e.g., `en_US.UTF-8`).
-Kubuntu 26.04 sets this by default. If not:
+**Verify:** `LANG` ends in `.UTF-8` (e.g., `en_US.UTF-8`,
+`en_BE.UTF-8`). Any language is fine — the requirement is UTF-8
+encoding. Kubuntu 26.04 sets this by default.
+
+If `LANG` is empty, not UTF-8, or you want a different locale:
 
 ```sh
-$ sudo locale-gen en_US en_US.UTF-8
-$ sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
+$ sudo nano /etc/locale.gen
 ```
+
+Uncomment the line for your desired locale (e.g.,
+`en_BE.UTF-8 UTF-8`), save, then:
+
+```sh
+$ sudo locale-gen
+$ sudo update-locale LANG=en_BE.UTF-8
+```
+
+Substitute your preferred locale. Log out and back in for the
+change to take effect, then re-run `locale` to confirm.
 
 ## Step 2 — Enable the Universe repository
 

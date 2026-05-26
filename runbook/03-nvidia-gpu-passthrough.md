@@ -9,16 +9,19 @@ After this phase:
 
 - `prime-select` is set to `intel` on the host, releasing the dGPU.
 - The VM boots with both virtio-gpu (display) and the NVIDIA RTX
-  2000 Ada (compute/3D) via VFIO passthrough.
+  2000 Ada (CUDA/compute) via VFIO passthrough.
 - `nvidia-smi` works inside the guest.
-- The NVIDIA OpenGL renderer is accessible via PRIME offload.
+- The NVIDIA GPU is confirmed available for CUDA and compute
+  workloads. GL rendering on the NVIDIA GPU works but is **not
+  visible on screen** due to a virtio-gpu DMA-BUF import limitation
+  (see Step 9).
 
 ## Why VFIO passthrough?
 
 VFIO assigns a physical PCI device directly to a guest VM. The guest
-gets bare-metal GPU performance — full OpenGL, Vulkan, CUDA, and
-NVENC — because it talks to real hardware through its own driver, not
-through a paravirtualized shim.
+gets bare-metal GPU performance — CUDA, NVENC, and headless
+rendering — because it talks to real hardware through its own driver,
+not through a paravirtualized shim.
 
 On this laptop (Dell Precision 3581, MUXless hybrid graphics), the
 Intel iGPU drives all physical displays. The NVIDIA RTX 2000 Ada has
@@ -27,10 +30,13 @@ the host's display.
 
 The guest uses **both** GPUs:
 
-- **virtio-gpu** — display surface (SPICE console). Required because
-  the MUXless dGPU has no video outputs.
-- **NVIDIA RTX 2000 Ada via VFIO** — 3D acceleration, CUDA compute,
-  NVENC encoding.
+- **virtio-gpu** — display surface (SPICE console) and all visible
+  GL rendering. Required because the MUXless dGPU has no video
+  outputs.
+- **NVIDIA RTX 2000 Ada via VFIO** — CUDA compute, NVENC encoding,
+  headless rendering. PRIME render offload works (the GPU renders
+  correctly) but the results are **not visible on screen** because
+  virtio-gpu cannot import DMA-BUFs from the real GPU (see Step 9).
 
 ## Why no IOMMU kernel parameters?
 
@@ -301,31 +307,103 @@ the GPU:
   restore `prime-select on-demand`, reboot, dump the vBIOS, then
   switch back to `prime-select intel` and reboot again.
 
-## Step 9 — Verify GPU rendering
+## Step 9 — Verify GPU capabilities and display limitation
 
-Check which OpenGL renderer is available:
+The guest has two GPUs: virtio-gpu (primary display surface for the
+SPICE console) and the NVIDIA RTX 2000 Ada (VFIO passthrough, no
+display outputs). GL applications default to virtio-gpu. To target
+the NVIDIA GPU, set the PRIME offload environment variables:
 
 ```sh
-$ sudo apt install mesa-utils
+$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia <command>
+```
+
+### 9a — Install verification tools
+
+```sh
+$ sudo apt-get update && sudo apt-get upgrade -y
+$ sudo apt-get install -y mesa-utils glmark2-wayland
+```
+
+### 9b — Confirm default renderer (virtio-gpu)
+
+```sh
 $ glxinfo | grep 'OpenGL renderer'
 ```
 
-This may show `virgl` (the virtio-gpu renderer) because the
-compositor defaults to virtio-gpu. To target the NVIDIA GPU, use
-PRIME offload:
+**Verify:** shows `virgl` (the virtio-gpu paravirtualized renderer).
+
+### 9c — Confirm NVIDIA renderer via PRIME offload
 
 ```sh
-$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-    glxinfo | grep 'OpenGL renderer'
+$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia glxinfo | grep 'OpenGL renderer'
 ```
 
 **Verify:** shows `NVIDIA RTX 2000 Ada Generation Laptop GPU` (or
 similar NVIDIA string).
 
-**Watch out:** if PRIME offload does not work, verify:
-- `nvidia-smi` shows the GPU (Step 8 passed)
-- The `nvidia` kernel module is loaded: `lsmod | grep nvidia`
-- Xorg/XWayland can see both GPUs: `xrandr --listproviders`
+### 9d — glmark2 on NVIDIA (compute verification)
+
+```sh
+$ __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia glmark2-wayland
+```
+
+**Expected behavior:** the benchmark runs and prints scores to the
+terminal, but **the glmark2 window is invisible** — no rendered
+frames appear on screen.
+
+**Results (2026-05-26):**
+
+| Config | Renderer | Score (800x600) | Window visible |
+|--------|----------|-----------------|----------------|
+| Default (virtio-gpu) | virgl (Mesa Intel Iris Xe) | 283 | Yes |
+| PRIME offload (NVIDIA VFIO) | NVIDIA RTX 2000 Ada | 949 | No |
+
+The NVIDIA GPU renders correctly (3.4x faster than virgl) but the
+compositor cannot display the result.
+
+### Why the window is invisible
+
+Under Wayland PRIME render offload, the application renders on the
+NVIDIA GPU and exports the framebuffer as a DMA-BUF. The compositor
+(KWin) must then import that DMA-BUF onto the display GPU
+(virtio-gpu) for compositing. The virtio-gpu kernel driver **does
+not support DMA-BUF import** from real GPUs. The app renders
+correctly (hence the score), but the compositor silently fails to
+composite the result.
+
+This is documented in:
+
+- [Mesa MR !23896][mesa-mr] — "the original virgl doesn't support
+  this feature because virtio-gpu driver doesn't support DMA
+  operations so iGPU cannot import data from passthrough dGPU
+  directly." (A Xen-specific workaround exists but is not merged
+  for QEMU/KVM.)
+- [KWin MR !3859][kwin-mr] — documents the cross-device buffer
+  import path and its limitations.
+
+A kernel patch series by Intel ("drm/virtio: Import scanout buffers
+from other devices", [LWN][lwn-scanout]) would fix this, but it is
+**not merged** as of kernel 7.0 and was tested only on Intel GPUs.
+
+[Looking Glass][looking-glass] could bypass virtio-gpu entirely via
+shared memory, but its Linux guest capture component is
+"incomplete and not ready for usage" per the B7 documentation.
+
+[mesa-mr]: https://gitlab.freedesktop.org/mesa/mesa/-/merge_requests/23896
+[kwin-mr]: https://invent.kde.org/plasma/kwin/-/merge_requests/3859
+[lwn-scanout]: https://lwn.net/Articles/998774/
+[looking-glass]: https://looking-glass.io/docs/B7/install_host/
+
+### What this means for the project
+
+- **Visible GL apps** (rviz2, glmark2, Gazebo): run on virtio-gpu /
+  virgl. This is the only renderer that can display on screen.
+- **NVIDIA GPU**: available for **CUDA compute, NVENC encoding, and
+  headless rendering**. Fully functional for non-display workloads.
+- **rviz2**: renders on virgl (score 283 tier), not on the NVIDIA
+  GPU. This is a hardware topology limitation, not a configuration
+  issue.
 
 ## Step 10 — Snapshot
 
@@ -350,8 +428,10 @@ $ sudo cp /var/lib/libvirt/images/ros2-lyrical-dev.qcow2 \
 - [ ] `lsmod | grep nvidia` returns no output on the host
 - [ ] VM boots with VFIO passthrough (no start errors)
 - [ ] `lspci` in guest shows the NVIDIA RTX 2000 Ada
-- [ ] `nvidia-smi` works in guest — shows driver + GPU
-- [ ] `glxinfo` with PRIME offload shows NVIDIA renderer
+- [ ] `nvidia-smi` works in guest — shows driver + CUDA version
+- [ ] `glxinfo` with PRIME offload shows NVIDIA renderer string
+- [ ] `glmark2-wayland` with PRIME offload scores on NVIDIA GPU
+      (window invisible — DMA-BUF limitation documented in Step 9)
 - [ ] Canonical XML at `vm/ros2-lyrical-dev.xml` includes the
       `<hostdev>` block
 - [ ] Disk backup `ros2-lyrical-dev.nvidia-passthrough.qcow2` exists
@@ -404,4 +484,4 @@ VFIO — it reduces IOMMU overhead for host-side DMA (NVMe, NIC).
 
 ## Next
 
-[Phase 4 — Verification + performance comparison](04-verification.md)
+[Phase 4 — Verification](04-verification.md)
