@@ -38,24 +38,29 @@ full GPU compute and 3D acceleration via the host's dedicated NVIDIA GPU.
 
 ## Implementation phases
 
-1. **Phase 1 — Host VFIO preparation** — add `intel_iommu=on iommu=pt`
-   kernel parameters, verify IOMMU groups, configure `prime-select intel`
-   to release the dGPU from the host NVIDIA driver, verify `vfio-pci`
-   module is available. The existing QEMU/KVM/libvirt stack is reused
-   from the sibling PincherX-100 project.
-2. **Phase 2 — Guest provisioning with GPU passthrough** — create
-   Kubuntu 26.04 VM (4 vCPU, 8 GB RAM, 60 GB virtio disk). Initial
-   boot with virtio-gpu only. Then add VFIO passthrough of the RTX 2000
-   Ada (`0000:01:00.0`). Install NVIDIA driver in guest. Handle MUXless
-   vBIOS extraction if needed. Verify `nvidia-smi` and OpenGL inside
-   guest.
-3. **Phase 3 — ROS 2 Lyrical desktop-full install** — install
-   `ros-lyrical-desktop-full` via apt from the ROS 2 apt repository.
-   Verify package count, `ros2` CLI, and environment sourcing.
-4. **Phase 4 — Verification** — launch rviz2 and confirm it renders
-   using the NVIDIA GPU (not llvmpipe/virgl). Run a basic ROS 2
-   publisher/subscriber. Confirm colcon builds work. Snapshot the
-   verified state.
+Phases 1-2 run entirely on virtio-gpu — no NVIDIA card needed, no
+host reboot. The host reboot (`prime-select intel`) happens in
+Phase 3 only after ROS 2 is installed and a GPU baseline benchmark
+is recorded.
+
+1. **Phase 1 — Guest provisioning** — create Kubuntu 26.04 VM
+   (4 vCPU, 8 GB RAM, 60 GB virtio disk) with virtio-gpu, UEFI,
+   default NAT. Install from the Kubuntu 26.04 desktop ISO using the
+   "minimal installation" option. Snapshot the clean install.
+2. **Phase 2 — ROS 2 Lyrical install + baseline benchmark** — install
+   `ros-lyrical-desktop` and `ros-dev-tools` via the ROS 2 apt
+   repository. Verify talker/listener, colcon build. Run
+   `glmark2-wayland` on virtio-gpu to record the baseline GPU score
+   (the "before" measurement).
+3. **Phase 3 — NVIDIA GPU passthrough** — verify IOMMU (no kernel
+   params needed on kernel 7.0), `prime-select intel`, reboot (the
+   only one), add VFIO `<hostdev>` to domain XML, install NVIDIA
+   driver in guest. Handle MUXless vBIOS extraction if needed. Verify
+   `nvidia-smi` and PRIME offload OpenGL.
+4. **Phase 4 — Verification + performance comparison** — run
+   `glmark2-wayland` on NVIDIA and compare to the Phase 2 baseline.
+   Launch rviz2 on the NVIDIA GPU. Verify TF2, GPU utilization.
+   Document the performance comparison. Final snapshot.
 
 ## Key constraints
 
