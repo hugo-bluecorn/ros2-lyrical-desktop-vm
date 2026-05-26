@@ -54,7 +54,28 @@ $ sudo locale-gen en_US en_US.UTF-8
 $ sudo update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8
 ```
 
-## Step 2 — Install the ROS 2 apt source
+## Step 2 — Enable the Universe repository
+
+The ROS 2 apt source depends on packages in the Universe pocket.
+Kubuntu 26.04 desktop enables Universe by default, but the official
+ROS 2 install guide prescribes this step as a safety check.
+
+```sh
+$ sudo apt install software-properties-common
+$ sudo add-apt-repository universe
+```
+
+**Verify:**
+
+```sh
+$ apt-cache policy | grep universe
+```
+
+Shows one or more `universe` lines (e.g.,
+`l=Ubuntu,c=universe,b=amd64`). If no output, re-run the
+`add-apt-repository` command above.
+
+## Step 3 — Install the ROS 2 apt source
 
 The ROS 2 project distributes a deb package that configures the apt
 repository and signing key in one step.
@@ -79,7 +100,7 @@ $ apt-cache policy ros-lyrical-desktop
 
 Shows a candidate version from the ROS 2 repository (not "N/A").
 
-## Step 3 — Install ROS 2 Lyrical desktop
+## Step 4 — Install ROS 2 Lyrical desktop
 
 ```sh
 $ sudo apt-get update && sudo apt-get upgrade -y
@@ -97,7 +118,7 @@ $ dpkg -l | grep ros-lyrical | wc -l
 
 Expect a large number of packages (200+).
 
-## Step 4 — Install dev tools
+## Step 5 — Install dev tools
 
 ```sh
 $ sudo apt install ros-dev-tools
@@ -105,7 +126,7 @@ $ sudo apt install ros-dev-tools
 
 This adds colcon, rosdep, vcstool, and other build utilities.
 
-## Step 5 — Environment setup
+## Step 6 — Environment setup
 
 Add the ROS 2 environment to your shell profile:
 
@@ -123,7 +144,7 @@ $ echo $ROS_DISTRO
 
 `ros2 --help` prints the CLI usage. `ROS_DISTRO` shows `lyrical`.
 
-## Step 6 — Talker/listener smoke test
+## Step 7 — Talker/listener smoke test
 
 Open two terminals inside the guest.
 
@@ -145,7 +166,7 @@ working end-to-end.
 
 Stop both with Ctrl+C.
 
-## Step 7 — colcon build test
+## Step 8 — colcon build test
 
 Create a minimal workspace and build it:
 
@@ -167,7 +188,7 @@ Clean up:
 $ rm -rf ~/ros2_ws
 ```
 
-## Step 8 — Baseline GPU benchmark (virtio-gpu)
+## Step 9 — Baseline GPU benchmark (virtio-gpu)
 
 Install and run `glmark2-wayland` to record the virtio-gpu baseline.
 This score will be compared against the NVIDIA VFIO score in Phase 4.
@@ -197,7 +218,7 @@ $ glmark2-wayland 2>&1 | tee ~/glmark2-baseline-virtio-gpu.txt
 try `glmark2-x11` as a fallback (runs via XWayland). Install with
 `sudo apt install glmark2-x11`.
 
-## Step 9 — Snapshot
+## Step 10 — Snapshot
 
 Shut down the guest:
 
